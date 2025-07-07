@@ -612,7 +612,6 @@ def draw_conversation_view():
         if elapsed < 0:
             elapsed = 0
         chars_to_show = min(int(elapsed * typing_speed), len(dialogue))
-        # Only update displayed_text if we need to show more characters
         if chars_to_show > len(displayed_text):
             displayed_text = dialogue[:chars_to_show]
             
