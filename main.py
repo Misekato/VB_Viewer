@@ -4,6 +4,7 @@ import json
 from io import BytesIO
 from PIL import Image
 import platform 
+import urllib.parse
 
 # Load initial selection menu
 async def load_url_json(url):
@@ -466,7 +467,7 @@ async def handle_menu_events(event):
                     
                     
                     base_url = "https://raw.githubusercontent.com/Misekato/VB_Assets/refs/heads/main/Stories/"
-                    json_path = base_url + category["files"][selected_file_idx]
+                    json_path = base_url + urllib.parse.quote(category["files"][selected_file_idx])
                     
                     data = await load_url_json (url = json_path)
                         
@@ -522,7 +523,7 @@ async def handle_menu_events(event):
                             category = character["categories"][selected_category_idx]
 
                             base_url = "https://raw.githubusercontent.com/Misekato/VB_Assets/refs/heads/main/Stories/"
-                            json_path = base_url + category["files"][selected_file_idx]
+                            json_path = base_url + urllib.parse.quote(category["files"][selected_file_idx])
                             
                             data = await load_url_json (url = json_path)
                                 
