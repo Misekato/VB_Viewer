@@ -6,20 +6,18 @@ from PIL import Image
 import platform 
 import urllib.parse
 
+
 # Load initial selection menu
 async def load_url_json(url):
     async with platform.fopen(url, "r", encoding="utf-8") as f:
         selection_menu = json.load(f)
-
     return selection_menu
 
-#Pygame initialisation stuff
-
+# Pygame initialisation stuff
 SCREEN_WIDTH, SCREEN_HEIGHT = 1920, 1080
 BASE_WIDTH, BASE_HEIGHT = 1920, 1080  
 scale_x = SCREEN_WIDTH / BASE_WIDTH
 scale_y = SCREEN_HEIGHT / BASE_HEIGHT
-#This scale would need to change if using different aspect ratios probably
 CHAR_SCALE_RATIO = 0.8
 
 # --- Pygame Init ---
@@ -29,7 +27,7 @@ pygame.mixer.init()
 screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
 pygame.display.set_caption("Victory Belles Conversation Reader")
 font_size = max(12, int(28 * scale_y))
-font = pygame.font.SysFont("Arial", font_size) #Maybe this font should be changed
+font = pygame.font.SysFont("Arial", font_size)
 clock = pygame.time.Clock()
 
 # --- Game State Variables ---
@@ -72,8 +70,15 @@ muted = False
 volume = 0.5
 now = 0
 
-#To prevent closing due to multiple presses occuring quickly, or single press being registered multiple times for whatever reason 
-#Not too sure this is an issue but just in case
+# Touch scrolling variables
+is_dragging = False
+drag_start_y = 0
+drag_start_scroll = 0
+scroll_velocity = 0
+last_scroll_time = 0
+deceleration = 0.95  # Adjust for feel
+
+# Escape cooldown
 last_menu_escape_time = 0
 ESCAPE_COOLDOWN = 0.3
 
@@ -137,7 +142,6 @@ def draw_menu():
 
     pygame.display.flip()
 
-
 async def load_image(url):
     async with platform.fopen(url, "rb") as datafile:
         image_data = datafile.read()
@@ -159,7 +163,6 @@ async def load_image(url):
     
     return pygame_image
 
-
 def draw_text_wrapped(text, x, y, max_width, line_height):
     words = text.split(' ')
     lines = []
@@ -179,17 +182,22 @@ def draw_text_wrapped(text, x, y, max_width, line_height):
         screen.blit(img, (x, y + i * line_height))
 
 def draw_button(text, rect, selected=False):
+    # Increase touch target size on mobile
+    if platform.system() == 'Android' or platform.system() == 'iOS':
+        touch_rect = rect.inflate(20, 20)
+    else:
+        touch_rect = rect
+        
     color_bg = (70, 70, 70) if not selected else (100, 100, 150)
     color_text = (255, 255, 255)
-    pygame.draw.rect(screen, color_bg, rect, border_radius=int(8 * scale_x))
+    pygame.draw.rect(screen, color_bg, touch_rect, border_radius=int(8 * scale_x))
     img = font.render(text, True, color_text)
-    img_rect = img.get_rect(center=rect.center)
+    img_rect = img.get_rect(center=touch_rect.center)
     screen.blit(img, img_rect)
 
 def point_in_rect(point, rect):
     x, y = point
     return rect.left <= x <= rect.right and rect.top <= y <= rect.bottom
-
 
 def wrap_text(text, font, max_width):
     words = text.split(' ')
@@ -206,9 +214,6 @@ def wrap_text(text, font, max_width):
     lines.append(current_line.strip())
     return lines
 
-
-
-#Conversation button sizes and drawing offsets
 def prepare_convo_buttons():
     global convo_buttons, max_scroll
     convo_buttons.clear()
@@ -228,7 +233,6 @@ def prepare_convo_buttons():
     visible_area_height = SCREEN_HEIGHT - start_y
     max_scroll = max(0, total_height - visible_area_height)
 
-#Conversation loop - load background and sound for selected conversation and start with 1st dialog node
 async def load_conversation(convo_id):
     global current_convo_id, dialog_nodes, bg_image, char_img, prev_actor_id
     global current_sound, sound_channel
@@ -245,20 +249,18 @@ async def load_conversation(convo_id):
         url = base_url + locations[loc_id]["Image"]
         bg_image = await load_image(url)
         
-        # Load and play corresponding sound file in loop
         if bg_image:
             loc_image = locations[loc_id]["Image"]
             sound_path = os.path.join("Sounds", os.path.splitext(loc_image)[0] + "_sfx.wav")
             if os.path.exists(sound_path):
                 try:
                     pygame.mixer.music.load(sound_path)
-                    pygame.mixer.music.play(loops=-1) #-1 is for looping infinite times (guessing)
+                    pygame.mixer.music.play(loops=-1)
                 except Exception as e:
                     print(f"Failed to load sound: {sound_path} - {str(e)}")
                     current_sound = None
     return bg_image
 
-#load each of the text nodes loop
 async def load_node(node_id):
     global current_node_id, char_img, actor_name, dialogue, node_start_time
     global choice_mode, choices, choice_rects, prev_actor_id, current_char_img
@@ -293,7 +295,6 @@ async def load_node(node_id):
 
     dialogue = dialogue_text
 
-    #Don't change sprite if person talking is captain - since there is none? Maybe should allow selection
     if actor_id != captain_actor_id:
         if not actor_image and actor_num and int(actor_num) > 0:
             actor_image = selected_actor_images.get(str(actor_num), "")
@@ -328,7 +329,6 @@ async def load_node(node_id):
 
     node_start_time = pygame.time.get_ticks() / 1000 - 0.1
 
-#At end of each conversation reset 
 def reset_conversation_state():
     global current_node_id, current_convo_id, dialog_nodes, bg_image, char_img
     global actor_name, dialogue, choice_mode, choices, choice_rects, current_sound
@@ -346,7 +346,6 @@ def reset_conversation_state():
     choices.clear()
     choice_rects.clear()
 
-#Reset stuff if going back to main menu
 def reset_to_main_menu():
     global menu_state, selected_country_idx, selected_character_idx
     global selected_category_idx, selected_file_idx, json_path, selecting_convo
@@ -361,18 +360,38 @@ def reset_to_main_menu():
     json_path = None
     selecting_convo = True
 
-    
-#Menu selection logic
 async def handle_menu_events(event):
     global running, menu_state, selected_country_idx, selected_character_idx
     global selected_category_idx, selected_file_idx, json_path, selecting_convo
     global actors, locations, conversations, convo_map, captain_actor_id
     global bg_image, current_node_id, dialog_nodes, selected_convo_idx, scroll_offset, max_scroll
-    global last_menu_escape_time
+    global last_menu_escape_time, is_dragging, drag_start_y, drag_start_scroll, scroll_velocity
     
+    # Handle touch scrolling
+    if event.type == pygame.FINGERDOWN:
+        is_dragging = True
+        drag_start_y = event.y * SCREEN_HEIGHT
+        drag_start_scroll = scroll_offset
+        scroll_velocity = 0
+        
+    elif event.type == pygame.FINGERMOTION and is_dragging:
+        current_y = event.y * SCREEN_HEIGHT
+        scroll_offset = drag_start_scroll + (drag_start_y - current_y)
+        scroll_offset = max(0, min(scroll_offset, max_scroll))
+        scroll_velocity = (drag_start_y - current_y) * 2  # Adjust multiplier for sensitivity
+        last_scroll_time = pygame.time.get_ticks()
+        
+    elif event.type == pygame.FINGERUP:
+        is_dragging = False
+        
     if selecting_convo and json_path is not None:  # Conversation selection screen
-        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            mx, my = event.pos
+        if (event.type == pygame.MOUSEBUTTONDOWN and event.button == 1) or event.type == pygame.FINGERDOWN:
+            # Use touch position if it's a touch event
+            if event.type == pygame.FINGERDOWN:
+                mx, my = event.x * SCREEN_WIDTH, event.y * SCREEN_HEIGHT
+            else:
+                mx, my = event.pos
+                
             for i, (rect, _, cid) in enumerate(convo_buttons):
                 adjusted_rect = pygame.Rect(rect.x, rect.y - scroll_offset, rect.width, rect.height)
                 if adjusted_rect.collidepoint((mx, my)):
@@ -448,7 +467,6 @@ async def handle_menu_events(event):
                 target_y = start_y + current_idx * (item_height + spacing)
                 auto_scroll_to_selection(target_y)
 
-
             elif event.key == pygame.K_UP:
                 current_idx = (current_idx - 1) % len(items)
                 setattr(sys.modules[__name__], current_idx_name, current_idx)
@@ -465,11 +483,10 @@ async def handle_menu_events(event):
                     character = country["characters"][selected_character_idx]
                     category = character["categories"][selected_category_idx]
                     
-                    
                     base_url = "https://raw.githubusercontent.com/Misekato/VB_Assets/refs/heads/main/Stories/"
                     json_path = base_url + urllib.parse.quote(category["files"][selected_file_idx])
                     
-                    data = await load_url_json (url = json_path)
+                    data = await load_url_json(url = json_path)
                         
                     actors = {actor["ID"]: actor["Fields"] for actor in data["Assets"]["Actors"]}
                     locations = {loc["ID"]: loc["Fields"] for loc in data["Assets"]["Locations"]}
@@ -504,8 +521,13 @@ async def handle_menu_events(event):
             scroll_offset -= event.y * 30
             scroll_offset = max(0, min(scroll_offset, max_scroll))
                    
-        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            mx, my = event.pos
+        elif (event.type == pygame.MOUSEBUTTONDOWN and event.button == 1) or event.type == pygame.FINGERDOWN:
+            # Use touch position if it's a touch event
+            if event.type == pygame.FINGERDOWN:
+                mx, my = event.x * SCREEN_WIDTH, event.y * SCREEN_HEIGHT
+            else:
+                mx, my = event.pos
+                
             items = get_current_list()
             btn_width = SCREEN_WIDTH - 100
             btn_height = int(50 * scale_y)
@@ -516,7 +538,7 @@ async def handle_menu_events(event):
                 rect = pygame.Rect(50, start_y + i * (btn_height + spacing) - scroll_offset, btn_width, btn_height)
                 if point_in_rect((mx, my), rect):
                     setattr(sys.modules[__name__], idx_name_map[menu_state], i)
-                    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    if (event.type == pygame.MOUSEBUTTONDOWN and event.button == 1) or event.type == pygame.FINGERDOWN:
                         if menu_state == "file":
                             country = selection_menu[selected_country_idx]
                             character = country["characters"][selected_character_idx]
@@ -525,7 +547,7 @@ async def handle_menu_events(event):
                             base_url = "https://raw.githubusercontent.com/Misekato/VB_Assets/refs/heads/main/Stories/"
                             json_path = base_url + urllib.parse.quote(category["files"][selected_file_idx])
                             
-                            data = await load_url_json (url = json_path)
+                            data = await load_url_json(url = json_path)
                                 
                             actors = {actor["ID"]: actor["Fields"] for actor in data["Assets"]["Actors"]}
                             locations = {loc["ID"]: loc["Fields"] for loc in data["Assets"]["Locations"]}
@@ -549,21 +571,25 @@ async def handle_conversation_events(event):
     global bg_image, char_img, actor_name, dialogue, choice_mode, choices, choice_rects
     global node_start_time
     
-    # First ensure we have valid dialogue nodes (file loaded)
     if dialog_nodes is None or current_node_id is None:
         reset_conversation_state()
         selecting_convo = True
         return
 
     if choice_mode:
-        if event.type == pygame.MOUSEBUTTONDOWN:
-            mx, my = event.pos
+        if (event.type == pygame.MOUSEBUTTONDOWN and event.button == 1) or event.type == pygame.FINGERDOWN:
+            # Use touch position if it's a touch event
+            if event.type == pygame.FINGERDOWN:
+                mx, my = event.x * SCREEN_WIDTH, event.y * SCREEN_HEIGHT
+            else:
+                mx, my = event.pos
+                
             for i, rect in enumerate(choice_rects):
                 if point_in_rect((mx, my), rect):
                     await load_node(choices[i][1])
                     break
     else:
-        if event.type == pygame.MOUSEBUTTONDOWN:
+        if (event.type == pygame.MOUSEBUTTONDOWN and event.button == 1) or event.type == pygame.FINGERDOWN:
             if current_node_id not in dialog_nodes:
                 reset_conversation_state()
                 selecting_convo = True
@@ -580,7 +606,7 @@ async def handle_conversation_events(event):
             else:
                 if links:
                     next_node_id = links[0]["DestinationDialogID"]
-                    if next_node_id in dialog_nodes:  # Check if next node exists
+                    if next_node_id in dialog_nodes:
                         await load_node(next_node_id)
                     else:
                         reset_conversation_state()
@@ -590,7 +616,6 @@ async def handle_conversation_events(event):
                     selecting_convo = True
 
 def draw_conversation_view():
-    
     global box_height, now, displayed_text
     
     box_height = int(160 * scale_y)
@@ -607,8 +632,7 @@ def draw_conversation_view():
         screen.blit(char_img, (char_x, char_y), source_rect)
 
     if not choice_mode:
-        
-        elapsed = now - node_start_time
+        elapsed = pygame.time.get_ticks() / 1000 - node_start_time
         if elapsed < 0:
             elapsed = 0
         chars_to_show = min(int(elapsed * typing_speed), len(dialogue))
@@ -646,7 +670,7 @@ def draw_conversation_view():
 
             y += btn_height + spacing
     else:
-        elapsed = now - node_start_time
+        elapsed = pygame.time.get_ticks() / 1000 - node_start_time
         chars_to_show = min(int(elapsed * typing_speed), len(dialogue))
         displayed_text = dialogue[:chars_to_show]
         max_text_width = SCREEN_WIDTH - int(100 * scale_x)
@@ -671,11 +695,8 @@ def draw_conversation_view():
             screen.blit(bg_surf, (bg_rect.x, bg_rect.y))
             screen.blit(name_img, (name_x, name_y))
 
-# --- Main loop that starts everything/does stuff---
-
 async def main():
-    
-    global menu_state, selected_country_idx, selected_character_idx
+    global running, menu_state, selected_country_idx, selected_character_idx
     global selected_category_idx, selected_file_idx, selected_convo_idx
     global selecting_convo, current_convo_id, current_node_id, dialog_nodes
     global node_start_time, bg_image, char_img, current_char_img
@@ -684,11 +705,23 @@ async def main():
     global scroll_offset, max_scroll, prev_actor_id, selected_actor_images
     global json_path, actors, locations, conversations, convo_map
     global captain_actor_id, muted, volume
-    global selection_menu, now
+    global selection_menu, now, is_dragging, scroll_velocity, last_scroll_time
     
     running = True
     while running:
         now = pygame.time.get_ticks() / 1000
+
+        # Handle inertial scrolling
+        if not is_dragging and abs(scroll_velocity) > 0.1:
+            current_time = pygame.time.get_ticks()
+            delta_time = (current_time - last_scroll_time) / 1000.0
+            last_scroll_time = current_time
+            
+            scroll_offset += scroll_velocity * delta_time
+            scroll_offset = max(0, min(scroll_offset, max_scroll))
+            scroll_velocity *= deceleration
+        else:
+            scroll_velocity = 0
 
         if selection_menu is None:
             selection_menu = await load_url_json(url = "https://raw.githubusercontent.com/Misekato/VB_Assets/refs/heads/main/selection_menu.json")
